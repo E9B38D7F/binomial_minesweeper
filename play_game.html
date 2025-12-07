@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body { margin: 20px; font-family: monospace; display: flex; flex-direction: column; align-items: center; }
+        canvas { border: 2px solid black; cursor: pointer; }
+        .controls { margin-top: 20px; }
+        .controls h3 { margin-bottom: 10px; }
+        .game-mode { display: flex; align-items: center; margin-bottom: 10px; }
+        .game-mode button { width: 250px; padding: 10px; font-family: monospace; cursor: pointer; }
+        .game-mode span { margin-left: 15px; color: #666; }
+        .sliders { margin-top: 20px; }
+        .slider-row { display: flex; align-items: center; margin-bottom: 10px; }
+        .slider-row label { width: 150px; }
+        .slider-row input { width: 300px; margin-right: 10px; }
+        .slider-row span { color: #666; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <canvas id="canvas"></canvas>
+    <div class="controls">
+        <h3>New Game</h3>
+        <div class="game-mode">
+            <button onclick="newGame(false, true)">Normal Minesweeper</button>
+            <span>Classic rules: 0 means no adjacent mines</span>
+        </div>
+        <div class="game-mode">
+            <button onclick="newGame(true, false)">Independent Binomial</button>
+            <span>Each neighbor sampled independently</span>
+        </div>
+        <div class="game-mode">
+            <button onclick="newGame(true, true)">Global Binomial</button>
+            <span>All neighbors use same random sample</span>
+        </div>
+    </div>
+    <div class="sliders">
+        <div class="slider-row">
+            <label>Rows:</label>
+            <input type="range" id="rows" min="1" max="50" value="10" oninput="updateSlider('rows', this.value)">
+            <span id="rows-value">10</span>
+        </div>
+        <div class="slider-row">
+            <label>Columns:</label>
+            <input type="range" id="cols" min="1" max="50" value="10" oninput="updateSlider('cols', this.value)">
+            <span id="cols-value">10</span>
+        </div>
+        <div class="slider-row">
+            <label>Mine Fraction:</label>
+            <input type="range" id="mine-frac" min="0" max="1" step="0.01" value="0.1" oninput="updateSlider('mine-frac', this.value)">
+            <span id="mine-frac-value">0.10</span>
+        </div>
+    </div>
+    <script>
+        const COLOURS = {0: "#CCCCCC", 1: "#0000FF", 2: "#007F00", 3: "#BE0000", 
+                        4: "#000080", 5: "#800000", 6: "#4D829E", 7: "#000000", 
+                        8: "#808080", "-1": "#FF8000"};
+        
+        class BinomialGrid {
+            constructor(rows, cols, mineFrac, binomial = true, sameSample = false) {
+                this.rows = rows;
+                this.cols = cols;
+                this.numMines = Math.floor(mineFrac * rows * cols);
+                this.binomial = binomial;
+                this.mines = Array(rows).fill().map(() => Array(cols).fill(false));
+                this.flags = Array(rows).fill().map(() => Array(cols).fill(false));
+                this.visible = Array(rows).fill().map(() => Array(cols).fill(false));
+                this.won = this.lost = false;
+                
+                let indices = [...Array(rows * cols).keys()];
+                for (let i = indices.length - 1; i > 0; i--) {
+                    const j = Math.floor(Math.random() * (i + 1));
+                    [indices[i], indices[j]] = [indices[j], indices[i]];
+                }
+                indices.slice(0, this.numMines).forEach(idx => {
+                    this.mines[Math.floor(idx / cols)][idx % cols] = true;
+                });
+                
+                this.combined = Array(rows).fill().map(() => Array(cols).fill(0));
+                const globalSample = sameSample ? Array(8).fill().map(() => Math.floor(Math.random() * 8)) : null;
+                
+                for (let i = 0; i < rows; i++) {
+                    for (let j = 0; j < cols; j++) {
+                        if (this.mines[i][j]) {
+                            this.combined[i][j] = -1;
+                            continue;
+                        }
+                        
+                        const neighbors = [];
+                        for (let di = -1; di <= 1; di++) {
+                            for (let dj = -1; dj <= 1; dj++) {
+                                if (di === 0 && dj === 0) continue;
+                                const ni = i + di, nj = j + dj;
+                                if (ni >= 0 && ni < rows && nj >= 0 && nj < cols) {
+                                    neighbors.push(this.mines[ni][nj]);
+                                }
+                            }
+                        }
+                        
+                        if (binomial) {
+                            const samples = sameSample ? globalSample : Array(8).fill().map(() => Math.floor(Math.random() * 8));
+                            this.combined[i][j] = samples.map(idx => neighbors[idx] ? 1 : 0).reduce((a, b) => a + b, 0);
+                        } else {
+                            this.combined[i][j] = neighbors.filter(Boolean).length;
+                        }
+                    }
+                }
+            }
+            
+            guess(r, c) {
+                this.visible[r][c] = true;
+                if (this.mines[r][c]) {
+                    this.lost = true;
+                    this.visible = this.visible.map(row => row.map(() => true));
+                    return;
+                }
+                if (!this.binomial && this.combined[r][c] === 0) {
+                    for (let di = -1; di <= 1; di++) {
+                        for (let dj = -1; dj <= 1; dj++) {
+                            const ni = r + di, nj = c + dj;
+                            if (ni >= 0 && ni < this.rows && nj >= 0 && nj < this.cols && !this.visible[ni][nj]) {
+                                this.guess(ni, nj);
+                            }
+                        }
+                    }
+                }
+            }
+            
+            flag(r, c) {
+                this.flags[r][c] = !this.flags[r][c];
+                this.visible[r][c] = this.flags[r][c];
+                if (this.flags.flat().filter(Boolean).length === this.numMines) {
+                    let allCorrect = true;
+                    for (let i = 0; i < this.rows; i++) {
+                        for (let j = 0; j < this.cols; j++) {
+                            if (this.flags[i][j] && !this.mines[i][j]) allCorrect = false;
+                        }
+                    }
+                    if (allCorrect) {
+                        this.won = true;
+                        this.visible = this.visible.map(row => row.map(() => true));
+                    }
+                }
+            }
+        }
+        
+        let currentRows = 10, currentCols = 10, currentMineFrac = 0.1;
+        let grid = new BinomialGrid(currentRows, currentCols, currentMineFrac, true, true);
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        let cellSize = 50;
+        
+        function resizeCanvas() {
+            cellSize = Math.min(50, Math.floor(600 / Math.max(currentRows, currentCols)));
+            canvas.width = currentCols * cellSize;
+            canvas.height = currentRows * cellSize;
+        }
+        resizeCanvas();
+        
+        function updateSlider(name, value) {
+            if (name === 'rows') {
+                currentRows = parseInt(value);
+                document.getElementById('rows-value').textContent = value;
+            } else if (name === 'cols') {
+                currentCols = parseInt(value);
+                document.getElementById('cols-value').textContent = value;
+            } else if (name === 'mine-frac') {
+                currentMineFrac = parseFloat(value);
+                document.getElementById('mine-frac-value').textContent = parseFloat(value).toFixed(2);
+            }
+        }
+        
+        function newGame(binomial, sameSample) {
+            grid = new BinomialGrid(currentRows, currentCols, currentMineFrac, binomial, sameSample);
+            resizeCanvas();
+            draw();
+        }
+        
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            for (let i = 0; i < grid.rows; i++) {
+                for (let j = 0; j < grid.cols; j++) {
+                    ctx.fillStyle = grid.visible[i][j] ? '#FFF' : '#888';
+                    ctx.fillRect(j * cellSize, i * cellSize, cellSize, cellSize);
+                    ctx.strokeRect(j * cellSize, i * cellSize, cellSize, cellSize);
+                    
+                    if (grid.visible[i][j]) {
+                        const val = grid.combined[i][j];
+                        const text = grid.flags[i][j] ? "⚑" : (val === -1 ? "●" : (val === 0 ? "" : val));
+                        ctx.fillStyle = grid.flags[i][j] ? "#8000FF" : COLOURS[val];
+                        ctx.font = "bold 30px monospace";
+                        ctx.textAlign = "center";
+                        ctx.textBaseline = "middle";
+                        ctx.fillText(text, j * cellSize + cellSize/2, i * cellSize + cellSize/2);
+                    }
+                }
+            }
+            
+            if (grid.won || grid.lost) {
+                ctx.fillStyle = grid.won ? "green" : "red";
+                ctx.font = "bold 50px monospace";
+                ctx.textAlign = "center";
+                ctx.fillText(grid.won ? "YOU WIN" : "YOU LOSE", canvas.width/2, canvas.height/2);
+            }
+        }
+        
+        canvas.addEventListener('click', e => {
+            const rect = canvas.getBoundingClientRect();
+            const col = Math.floor((e.clientX - rect.left) / cellSize);
+            const row = Math.floor((e.clientY - rect.top) / cellSize);
+            grid.guess(row, col);
+            draw();
+        });
+        
+        canvas.addEventListener('contextmenu', e => {
+            e.preventDefault();
+            const rect = canvas.getBoundingClientRect();
+            const col = Math.floor((e.clientX - rect.left) / cellSize);
+            const row = Math.floor((e.clientY - rect.top) / cellSize);
+            grid.flag(row, col);
+            draw();
+        });
+        
+        draw();
+    </script>
+</body>
+</html>
