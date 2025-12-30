@@ -19,20 +19,18 @@
 <body>
     <canvas id="canvas"></canvas>
     <div class="controls">
-        <h2>New Game</h2>
-        <h4>Right click to flag mines. (Tap and hold on mobile.)</h4>
-        <h4>Check rules at https://github.com/E9B38D7F/binomial_minesweeper/blob/main/README.txt</h4>
+        <h3>New Game</h3>
         <div class="game-mode">
             <button onclick="newGame(false, true)">Normal Minesweeper</button>
             <span>Classic rules: 0 means no adjacent mines</span>
         </div>
         <div class="game-mode">
             <button onclick="newGame(true, false)">Independent Binomial</button>
-            <span>Each neighbour sampled independently</span>
+            <span>Each neighbor sampled independently</span>
         </div>
         <div class="game-mode">
             <button onclick="newGame(true, true)">Global Binomial</button>
-            <span>All neighbours use same random sample</span>
+            <span>All neighbors use same random sample</span>
         </div>
     </div>
     <div class="sliders">
@@ -78,7 +76,15 @@
                 });
                 
                 this.combined = Array(rows).fill().map(() => Array(cols).fill(0));
-                const globalSample = sameSample ? Array(8).fill().map(() => Math.floor(Math.random() * 8)) : null;
+                
+                const directions = [
+                    [-1, -1], [-1, 0], [-1, 1],
+                    [0, -1],           [0, 1],
+                    [1, -1],  [1, 0],  [1, 1]
+                ];
+                
+                const globalSample = sameSample ? 
+                    Array(8).fill().map(() => Math.floor(Math.random() * 8)) : null;
                 
                 for (let i = 0; i < rows; i++) {
                     for (let j = 0; j < cols; j++) {
@@ -87,22 +93,27 @@
                             continue;
                         }
                         
-                        const neighbors = [];
-                        for (let di = -1; di <= 1; di++) {
-                            for (let dj = -1; dj <= 1; dj++) {
-                                if (di === 0 && dj === 0) continue;
+                        if (binomial) {
+                            const samples = sameSample ? globalSample : 
+                                Array(8).fill().map(() => Math.floor(Math.random() * 8));
+                            let count = 0;
+                            for (let s of samples) {
+                                const [di, dj] = directions[s];
                                 const ni = i + di, nj = j + dj;
-                                if (ni >= 0 && ni < rows && nj >= 0 && nj < cols) {
-                                    neighbors.push(this.mines[ni][nj]);
+                                if (ni >= 0 && ni < rows && nj >= 0 && nj < cols && this.mines[ni][nj]) {
+                                    count++;
                                 }
                             }
-                        }
-                        
-                        if (binomial) {
-                            const samples = sameSample ? globalSample : Array(8).fill().map(() => Math.floor(Math.random() * 8));
-                            this.combined[i][j] = samples.map(idx => neighbors[idx] ? 1 : 0).reduce((a, b) => a + b, 0);
+                            this.combined[i][j] = count;
                         } else {
-                            this.combined[i][j] = neighbors.filter(Boolean).length;
+                            let count = 0;
+                            for (let [di, dj] of directions) {
+                                const ni = i + di, nj = j + dj;
+                                if (ni >= 0 && ni < rows && nj >= 0 && nj < cols && this.mines[ni][nj]) {
+                                    count++;
+                                }
+                            }
+                            this.combined[i][j] = count;
                         }
                     }
                 }
